@@ -7,6 +7,8 @@ import (
 	"github.com/mikeblum/atproto-graph-viz/bsky"
 	"github.com/mikeblum/atproto-graph-viz/conf"
 	"github.com/mikeblum/atproto-graph-viz/graph"
+	"github.com/mikeblum/atproto-graph-viz/o11y"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 )
 
 func main() {
@@ -15,6 +17,18 @@ func main() {
 	defer cancel()
 	var client *bsky.Client
 	var err error
+
+	// configure o11y
+	var exporter *otlpmetricgrpc.Exporter
+	if exporter, err = o11y.NewO11yLocal(ctx, log); err != nil {
+		log.WithErrorMsg(err, "Error bootstrapping OTEL o11y", "mode", "local")
+		exit()
+	}
+	defer func() {
+		if err := exporter.Shutdown(ctx); err != nil {
+			log.WithError(err).Error("failed to shutdown OTEL exporter")
+		}
+	}()
 
 	var engine *graph.Engine
 	if engine, err = graph.Bootstrap(ctx); err != nil {

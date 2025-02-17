@@ -9,6 +9,8 @@ import (
 
 	"github.com/bluesky-social/indigo/xrpc"
 	log "github.com/mikeblum/atproto-graph-viz/conf"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -43,6 +45,7 @@ type RateLimitHandler struct {
 	maxWaitTime       time.Duration
 	readBaseWaitTime  time.Duration
 	writeBaseWaitTime time.Duration
+	metrics           *RateLimitMetrics
 }
 
 // NewRateLimitHandler - default rate limt
@@ -60,9 +63,13 @@ func NewRateLimitHandler(client *xrpc.Client) *RateLimitHandler {
 }
 
 // executeWithRetry executes an API call with rate limit handling
-func (h *RateLimitHandler) withRetry(ctx context.Context, opType OperationType, operation func() error) error {
-	var waitTime time.Duration
+func (h *RateLimitHandler) withRetry(ctx context.Context, opType OperationType, opName string, operation func() error) error {
+	baseAttrs := []attribute.KeyValue{
+		attribute.String("name", opName),
+		attribute.String("type", opType.String()),
+	}
 	var err error
+	var waitTime time.Duration
 	var attempt int
 	for {
 		if (h.maxRetries > 0 && attempt >= h.maxRetries) || waitTime >= h.maxWaitTime {
@@ -85,8 +92,12 @@ func (h *RateLimitHandler) withRetry(ctx context.Context, opType OperationType, 
 		}
 		switch apiErr.StatusCode {
 		case http.StatusTooManyRequests:
+			// Record TooManyRequests metric
+			h.metrics.rateLimit.Add(ctx, 1, metric.WithAttributes(baseAttrs...))
 			waitTime = h.calculateWaitTime(apiErr, attempt, opType)
-			h.log.With("action", "retry", "op", opType, "wait", waitTime, "attempt", attempt+1, "max-retry", h.maxRetries, "max-wait", h.maxWaitTime).Warn(fmt.Sprintf("Rate limit exceeded. Waiting %v", waitTime))
+			h.metrics.currentBackoff.Add(ctx, waitTime.Seconds(), metric.WithAttributes(baseAttrs...))
+			h.metrics.retryAttempts.Add(ctx, 1, metric.WithAttributes(baseAttrs...))
+			h.log.With("action", "retry", "op-name", opName, "op-type", opType, "wait", waitTime, "attempt", attempt+1, "max-retry", h.maxRetries, "max-wait", h.maxWaitTime).Warn(fmt.Sprintf("Rate limit exceeded. Waiting %v", waitTime))
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("context cancelled while waiting for rate limit: %w", ctx.Err())
@@ -99,9 +110,23 @@ func (h *RateLimitHandler) withRetry(ctx context.Context, opType OperationType, 
 	}
 	var retryErr error
 	if h.maxRetries > 0 {
-		retryErr = fmt.Errorf("operation failed after %d retries: %w", h.maxRetries, err)
+		retryErr = fmt.Errorf("%s op: %s failed after %d retries: %w", opType, opName, h.maxRetries, err)
+		h.metrics.failures.Add(ctx, 1,
+			metric.WithAttributes(baseAttrs...),
+			metric.WithAttributes(
+				attribute.String("failure_type",
+					string(FailureMaxAttempts)),
+			),
+		)
 	} else {
-		retryErr = fmt.Errorf("operation failed after %v: %w", h.maxWaitTime, err)
+		retryErr = fmt.Errorf("%s op: %s failed after %v: %w", opType, opName, h.maxWaitTime, err)
+		h.metrics.failures.Add(ctx, 1,
+			metric.WithAttributes(baseAttrs...),
+			metric.WithAttributes(
+				attribute.String("failure_type",
+					string(FailureMaxWaitTime)),
+			),
+		)
 	}
 	h.log.WithErrorMsg(retryErr, "Retry Exhausted", "action", "retry", "op", opType, "max-retry", h.maxRetries, "max-wait", h.maxWaitTime)
 	return retryErr

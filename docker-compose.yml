@@ -1,6 +1,31 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "4317:4317"       # OTLP gRPC
+      - "4318:4318"       # OTLP HTTP
+      - "5778:5778"       # Jaeger admin port
+      - "16686:16686"     # Jaeger UI
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+      MEMORY_MAX_TRACES: 100000
+      QUERY_BASE_PATH: /jaeger
+    volumes:
+      - jaeger-data:/badger 
+    networks:
+      - monitoring_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:16686 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
   neo4j:
-    image: neo4j:5.26.2-community-bullseye 
+    image: neo4j:5.26.2-community-bullseye
+    container_name: neo4j
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -16,11 +41,23 @@ services:
       - neo4j_logs:/logs
     networks:
       - neo4j_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7687 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
 
 volumes:
+  jaeger-data:
   neo4j_data:
   neo4j_logs:
 
 networks:
+  monitoring_net:
+    name: monitoring
+    driver: bridge
   neo4j_net:
+    name: neo4j
     driver: bridge

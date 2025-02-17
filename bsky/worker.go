@@ -147,20 +147,20 @@ func (p *WorkerPool) Submit(ctx context.Context, job RepoJob) error {
 }
 
 func (p *WorkerPool) ingestWorker(ctx context.Context, workerID int) error {
-	p.log.Info("Worker started", "type", "ingest", "worker-id", workerID)
-	defer p.log.Info("Worker shutting down", "type", "ingest", "worker-id", workerID)
+	p.log.Info("Worker started", "worker-type", "ingest", "worker-id", workerID)
+	defer p.log.Info("Worker shutting down", "worker-type", "ingest", "worker-id", workerID)
 
 	for {
 		select {
 		case <-ctx.Done():
-			p.log.Info("Context cancelled", "worker-id", workerID)
+			p.log.Info("Context cancelled", "worker-type", "ingest", "worker-id", workerID)
 			return ctx.Err()
 		case <-p.done:
-			p.log.Info("Done channel closed", "worker-id", workerID)
+			p.log.Info("Done channel closed", "worker-type", "ingest", "worker-id", workerID)
 			return nil
 		case ingest, ok := <-p.ingests:
 			if !ok {
-				p.log.Info("Ingest channel closed", "worker-id", workerID)
+				p.log.Info("Ingest channel closed", "worker-type", "ingest", "worker-id", workerID)
 				return nil
 			}
 
@@ -169,7 +169,7 @@ func (p *WorkerPool) ingestWorker(ctx context.Context, workerID int) error {
 				"worker-id", workerID,
 				"did", ingest.repo.RepoDid())
 
-			err := p.rateLimiter.withRetry(ctx, WriteOperation, func() error {
+			err := p.rateLimiter.withRetry(ctx, WriteOperation, "ingest", func() error {
 				return p.ingest(ctx, ingest.items)
 			})
 
@@ -206,7 +206,7 @@ func (p *WorkerPool) repoWorker(ctx context.Context, workerID int) error {
 				"worker-id", workerID,
 				"did", job.repo.Did)
 
-			err := p.rateLimiter.withRetry(ctx, ReadOperation, func() error {
+			err := p.rateLimiter.withRetry(ctx, ReadOperation, "getRepo", func() error {
 				if err := p.getRepo(ctx, job); err != nil {
 					if !suppressATProtoErr(err) {
 						p.log.WithErrorMsg(err, "Error getting repo",
